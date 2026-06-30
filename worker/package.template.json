@@ -1,0 +1,8 @@
+{
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "run:poll": "node src/jobs/pollPendingRuns.js"
+  }
+}
