@@ -26,6 +26,9 @@
 | Cloudflare Tunnel creado | 2026-08-28 |
 | Registro DNS `api.mapadata.cl` | 2026-08-28 |
 | Backend accesible vía tunnel | 2026-08-28 |
+| Google Places API Key configurada | 2026-08-28 |
+| Worker procesando jobs | 2026-08-28 |
+| DNS de DonWeb apuntando a Cloudflare | 2026-08-28 |
 
 ### En progreso
 
