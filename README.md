@@ -1,6 +1,6 @@
 # Mapadata.cl — Motor de Ventas B2B
 
-> Plataforma web que permite a empresas buscar y descargar bases de datos de empresas verificadas en Chile.
+> Plataforma web que permite a empresas buscar y descargar bases de datos de empresas verificadas en Chile bajo la nuea ley de protección de datos.
 
 ## Estado del Proyecto
 
@@ -10,7 +10,7 @@
 | **Worker Google Places** | ✅ Corriendo con systemd (falta API Key) |
 | **Cloudflare R2** | ✅ Bucket `mapadata` creado |
 | **Cloudflare Tunnel** | ✅ Configurado para `api.mapadata.cl` |
-| **Base de Datos Neon** | ✅ Conectado con 82 comunas |
+| **Base de Datos Neon** | ✅ Conectado con 347 comunas |
 | **Frontend Next.js** | ✅ En GitHub (pendiente deploy) |
 | **Repo GitHub** | ✅ Limpio (sin secretos en historial) |
 
