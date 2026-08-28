@@ -23,6 +23,9 @@
 | Worker corriendo en systemd | 2026-08-27 |
 | Token eliminado del historial de git | 2026-08-28 |
 | Repo GitHub limpio (sin secretos) | 2026-08-28 |
+| Cloudflare Tunnel creado | 2026-08-28 |
+| Registro DNS `api.mapadata.cl` | 2026-08-28 |
+| Backend accesible vía tunnel | 2026-08-28 |
 
 ### En progreso
 
@@ -35,9 +38,8 @@
 
 | Tarea | Prioridad | Descripción |
 |---|---|---|
-| Cloudflare Tunnel para api.mapadata.cl | 🔴 Alta | Exponer backend en `api.mapadata.cl` |
 | Deploy frontend en Cloudflare Pages | 🔴 Alta | Publicar frontend en la nube |
-| Configurar DNS mapadata.cl en Cloudflare | 🔴 Alta | Apuntar dominio a Cloudflare |
+| Configurar DNS `www.mapadata.cl` | 🔴 Alta | Apuntar a Cloudflare Pages |
 | Integrar MercadoPago | 🟡 Media | Procesar pagos |
 | Mejorar selector de comunas (mapa) | 🟡 Media | Mapa interactivo de Chile |
 | Sistema de notificaciones | 🟡 Media | Email/webhook cuando job termine |
@@ -56,25 +58,15 @@
    systemctl --user restart mapadata-worker
    ```
 
-2. **Instalar Cloudflare Tunnel**
-   ```bash
-   cloudflared tunnel login
-   cloudflared tunnel create mapadata
-   cloudflared tunnel route dns mapadata api.mapadata.cl
-   cloudflared tunnel run mapadata
-   ```
-
-3. **Deploy frontend en Cloudflare Pages**
+2. **Deploy frontend en Cloudflare Pages**
    - Ir a dash.cloudflare.com → Workers & Pages
    - Create Application → Pages → Connect to Git
    - Seleccionar repo `zarnoso/mapadata.cl`
    - Build command: `npm run build`
    - Output directory: `.next`
 
-4. **Configurar DNS**
-   - Agregar zona `mapadata.cl` en Cloudflare
-   - Crear registro CNAME `api` → tunnel
-   - Crear registro CNAME `www` → Cloudflare Pages
+3. **Configurar DNS `www.mapadata.cl`**
+   - Agregar registro CNAME `www` → Cloudflare Pages
 
 ---
 
@@ -85,3 +77,4 @@
 - Se recomienda no exceder 2000 queries por job (costo ~$34 USD)
 - Los CSVs se generan con UTF-8 BOM para compatibilidad con Excel
 - El sistema respeta rate limits de Google (2s entre páginas, 0.1s entre detalles)
+- El backend corre en Python 3.11 (evita problemas con psycopg2 en 3.13)

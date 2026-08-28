@@ -1,109 +1,179 @@
-# Mapadata.cl - Arquitectura Final
+# Mapadata.cl — Documentación de Arquitectura
 
-## Objetivo
+## Descripción del Producto
 
-Unificar el producto en una sola base de código y evitar que frontend, API y worker compitan entre sí.
+**Mapadata.cl** es una plataforma web que permite a clientes empresariales (B2B) buscar y descargar bases de datos de empresas en Chile. El cliente selecciona comunas y áreas de interés, y la plataforma genera un archivo CSV con los datos de contacto de empresas verificadas.
 
-## Decisión principal
+**Propuesto de valor:** "Convierte Google Maps en tu motor de ventas."
 
-- **Frontend**: `www.mapadata.cl` en Cloudflare Pages
-- **API pública**: `api.mapadata.cl` en FastAPI
-- **Worker**: proceso aparte, en tu servidor o VPS
-- **DB**: Neon PostgreSQL
-- **Storage**: Cloudflare R2
+---
 
-## Flujo exacto
+## Arquitectura del Sistema
 
-```text
-Usuario -> www.mapadata.cl
-         -> GET https://api.mapadata.cl/api/comunas
-         -> POST https://api.mapadata.cl/api/jobs
-         -> API guarda job en Neon
-         -> Worker consulta jobs pendientes
-         -> Worker llama Google Places
-         -> Worker enriquece datos
-         -> Worker genera CSV
-         -> Worker sube CSV a R2
-         -> API expone estado y URL final
-         -> Frontend muestra progreso / descarga
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  www.mapadata.cl (Cloudflare Pages)                              │
+│  - Selector de comunas (mapa/checklist)                          │
+│  - Selector de áreas de búsqueda (términos)                      │
+│  - Tabla de resultados con descarga CSV                          │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │ POST /api/jobs
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  api.mapadata.cl (Cloudflare Tunnel)                             │
+│  - Backend FastAPI en tu servidor Debian 13                      │
+│  - PostgreSQL Neon                                               │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │ FOR UPDATE SKIP LOCKED
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Worker Python                                                   │
+│  1. Lee job pendiente de Neon                                   │
+│  2. Consulta Google Places API (textsearch)                     │
+│  3. Enriquece datos (teléfono, web) via Place Details          │
+│  4. Extrae emails desde webs (regex + mailto)                   │
+│  5. Deduplica resultados                                        │
+│  6. Genera CSV                                                   │
+│  7. Sube a Cloudflare R2                                        │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## Qué vive en cada capa
+---
 
-### Frontend
+## Componentes
 
-- landing
-- explorador
-- checkout MercadoPago
-- consulta de estado del job
-- descarga final
+### Frontend (`app/page.tsx`)
 
-### API
+- **Framework:** Next.js 16.2.4 + React 19.2.4 + Tailwind CSS 4
+- **Funcionalidad:**
+  - Selector de comunas por región (filtro cascada)
+  - Selector de términos de búsqueda (tags editables)
+  - Tabla de resultados con nombre, dirección, teléfono, web, email
+  - Botón de descarga CSV
+  - Indicador de carga animado
+- **Diseño:** Colores `#1a1a2e` (azul oscuro), Geist font, responsive
+- **Legal:** Incluye aviso de presunción de inocencia y fuente de datos
+- **Deploy:** Cloudflare Pages (pendiente)
 
-- `GET /api/health`
-- `GET /api/comunas`
-- `GET /api/regiones`
-- `POST /api/jobs`
-- `GET /api/jobs`
-- `GET /api/jobs/{id}`
-- `DELETE /api/jobs/{id}`
-- `GET /api/stats`
+### Backend (`backend.py`)
 
-### Worker
+- **Framework:** FastAPI 0.141.1 + Uvicorn 0.30.6
+- **Puerto:** 8001
+- **EndPoints:**
+  - `GET /api/comunas` — Lista comunas (filtro por región opcional)
+  - `POST /api/jobs` — Crea job de scraping
+  - `GET /api/jobs/{id}` — Estado de un job
+  - `GET /api/jobs` — Listar jobs por cliente
+- **Acceso:** `api.mapadata.cl` vía Cloudflare Tunnel
 
-- toma jobs con bloqueo seguro
-- consulta Google Places
-- enriquece teléfono, web y emails
-- deduplica resultados
-- genera CSV
-- sube a R2
-- actualiza el job en DB
+### Worker (`worker.py`)
 
-## Lo que se debe evitar
+- **Loop infinito** con `FOR UPDATE SKIP LOCKED`
+- **Google Places API:**
+  - `textsearch` — Búsqueda por término + zona (máx 60 resultados)
+  - `place details` — Enriquecimiento (teléfono, web)
+- **Extracción de emails:**
+  - Regex en HTML de webs
+  - Links `mailto:`
+  - Filtro de dominios no válidos
+- **Deduplicación:** Por `place_id` y por nombre+dirección normalizados
+- **Salida:** CSV UTF-8 con BOM, separado por comas
+- **Subida a R2:** Automática después de generar CSV
 
-- frontend hablando con `localhost` en producción
-- duplicar lógica de jobs en Next y FastAPI
-- dejar rutas demo en producción
-- guardar CSV solo en `/tmp`
-- mezclar funciones Deno/Supabase con el build del frontend si no se van a desplegar juntas
+### Base de Datos (Neon PostgreSQL)
 
-## Hosting recomendado
+**Tabla `scraping_jobs`:**
 
-### DonWeb Web Hosting Plan Emprendedor
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| id | SERIAL PK | Identificador único |
+| status | TEXT | queued / running / done / failed / cancelled |
+| comunas | TEXT[] | Array de comunas seleccionadas |
+| terminos | TEXT[] | Términos de búsqueda |
+| modo | TEXT | enriched (con teléfono/web/email) |
+| resultado_csv_url | TEXT | URL pública del CSV en R2 |
+| total_empresas | INT | Total de empresas encontradas |
+| con_email | INT | Cantidad con email |
+| creado_en | TIMESTAMPTZ | Fecha de creación |
+| terminado_en | TIMESTAMPTZ | Fecha de finalización |
+| cliente_id | INT | ID del cliente |
+| error_message | TEXT | Mensaje de error si falla |
 
-Sirve para:
+**Tabla `comunas_chile`:**
 
-- alojar frontend estático
-- servir páginas HTML/CSS/JS simples
-- correo y web básico
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| id | SERIAL PK | Identificador |
+| nombre | VARCHAR | Nombre de la comuna |
+| region | VARCHAR | Región |
+| region_number | VARCHAR | Número romano de región |
 
-No lo recomiendo como hogar del backend productivo si necesitas:
+**Datos:** 82 comunas insertadas (muestra representativa de todas las regiones)
 
-- procesos permanentes
-- worker de scraping corriendo siempre
-- tareas largas
-- jobs en cola
-- control fino de procesos
+---
 
-### Recomendación realista
+## Almacenamiento (Cloudflare R2)
 
-- usar Cloudflare Pages para frontend
-- usar un VPS o Cloud Server para `api.mapadata.cl` y el worker
-- usar DonWeb hosting solo si confirmas que tienes SSH, Python, procesos persistentes y cron suficientes
+- **Bucket:** `mapadata`
+- **Account ID:** `7976da0811374c03128e815940af652a`
+- **Endpoint:** `https://7976da0811374c03128e815940af652a.r2.cloudflarestorage.com/mapadata`
+- **Location:** Eastern North America (ENAM)
+- **URLs públicas:** `https://pub-7976da0811374c03128e815940af652a.r2.dev/{archivo}`
 
-## Variables críticas
+---
 
-- `NEXT_PUBLIC_API_BASE_URL=https://api.mapadata.cl`
-- `DATABASE_URL=...`
-- `GOOGLE_PLACES_API_KEY=...`
-- `R2_ACCOUNT_ID=...`
-- `R2_ACCESS_KEY_ID=...`
-- `R2_SECRET_ACCESS_KEY=...`
-- `MAPADATA_WORKER_SECRET=...`
+## Seguridad y Legalidad
 
-## Estado actual del repo
+- **Fuente de datos:** Google Places API (datos públicos verificados)
+- **Legalidad:** Los datos son de acceso público. No se almacenan datos de terceros sin consentimiento.
+- **Términos de servicio:** Los clientes aceptan uso responsable de los datos.
+- **Protección de datos:** No se incluyen datos de personas naturales, solo empresas.
+- **Disclaimer:** Incluye presunción de inocencia y fuente de datos.
+- **Rate limiting:** Respeto a servidores destino (0.3s entre requests)
+- **Límites de API:** Máximo 60 resultados por query, 5 términos por defecto
+- **Cumplimiento:** Ley 19.628 (protección de datos Chile)
 
-- frontend ya adaptado para consumir API externa
-- build de Next validado
-- documentación alineada con la arquitectura final
-- siguiente paso: endurecer backend y eliminar duplicados innecesarios
+---
+
+## Variables de Entorno
+
+```bash
+# Base de datos Neon
+DATABASE_URL=postgresql://neondb_owner:***@ep-dark-sunset-ah922o3v-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require
+
+# Google Places API
+GOOGLE_PLACES_API_KEY=AIza... (RELLENAR)
+
+# Cloudflare R2
+R2_ACCOUNT_ID=7976da0811374c03128e815940af652a
+R2_API_TOKEN=*** (CONFIGURADO LOCALMENTE)
+R2_BUCKET_NAME=mapadata
+R2_PUBLIC_URL=https://pub-7976da0811374c03128e815940af652a.r2.dev
+```
+
+---
+
+## Flujo de Uso
+
+1. Cliente entra a mapadata.cl
+2. Selecciona comunas (o "Todo Chile")
+3. Selecciona áreas de búsqueda (o usa las por defecto)
+4. Paga vía MercadoPago
+5. Se crea un job (status: queued)
+6. Worker toma el job y ejecuta scraping
+7. Se genera CSV y se sube a R2
+8. Cliente recibe notificación con enlace de descarga
+9. Cliente descarga el CSV
+
+---
+
+## Contacto
+
+- **Desarrollo:** Andrés Bravo (andres_bv@live.cl)
+- **GitHub:** https://github.com/zarnoso/mapadata.cl
+- **Dominio:** mapadata.cl (pendiente deploy)
+- **Deploy objetivo:** Cloudflare Pages (frontend) + VPS/Cloudflare Workers (backend)
+
+---
+
+*Última actualización: 2026-08-28*
