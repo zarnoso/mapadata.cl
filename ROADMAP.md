@@ -11,7 +11,7 @@
 | Backend FastAPI (endpoints) | 2026-08-26 |
 | Worker Google Places | 2026-08-26 |
 | Tabla `scraping_jobs` en Neon | 2026-08-26 |
-| Tabla `comunas_chile` (82 comunas) | 2026-08-26 |
+| Tabla `comunas_chile` (347 comunas) | ✅ | 2026-08-28 |
 | API endpoints funcionales | 2026-08-26 |
 | Worker loop con `FOR UPDATE SKIP LOCKED` | 2026-08-26 |
 | Extracción de emails desde webs | 2026-08-26 |
