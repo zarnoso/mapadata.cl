@@ -1,48 +1,105 @@
 #!/usr/bin/env python3
 import logging
 import os
+import re
 from contextlib import contextmanager
 from datetime import datetime
 from typing import List, Optional
 
 import psycopg2
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Security, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from psycopg2.extras import RealDictCursor
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
-DB_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://neondb_owner:REDACTED_DB_PASS@ep-dark-sunset-ah922o3v-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require",
-)
+DB_URL = os.environ.get("DATABASE_URL", "")
 ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in os.getenv(
+    for origin in os.environ.get(
         "CORS_ORIGINS",
-        "https://www.mapadata.cl,https://mapadata.cl,http://localhost:3000,http://localhost:3001",
+        "https://www.mapadata.cl,https://mapadata.cl",
     ).split(",")
     if origin.strip()
 ]
+
+API_KEY = os.environ.get("MAPADATA_API_KEY", "")
+
 DEFAULT_TERMINOS = ["comercializadora", "distribuidora", "importadora", "mayorista", "proveedor"]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mapadata-api")
 
-app = FastAPI(title="Mapadata API", version="2.0.0")
+app = FastAPI(title="Mapadata API", version="2.1.0")
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request, exc):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Demadasadas requests. Intentá de nuevo en un minuto."}
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS or ["*"],
+    allow_origins=ALLOWED_ORIGINS or ["https://www.mapadata.cl"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["api.mapadata.cl", "localhost", "127.0.0.1"])
+
+
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
+async def verify_api_key(request: Request):
+    if not API_KEY:
+        return True
+    x_api_key = request.headers.get("X-API-Key", "")
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=403, detail="API Key inválida")
+    return True
+
+
+def sanitize_comuna(comuna: str) -> str:
+    if not comuna or len(comuna) > 100:
+        raise ValueError("Comuna inválida")
+    if not re.match(r'^[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ\s\-]+$', comuna):
+        raise ValueError("Comuna contiene caracteres inválidos")
+    return comuna.strip()
+
+
+def sanitize_job_id(job_id: str) -> int:
+    try:
+        jid = int(job_id)
+        if jid <= 0 or jid > 999999:
+            raise ValueError
+        return jid
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Job ID inválido")
+
 
 class JobCreate(BaseModel):
-    comunas: List[str]
+    comunas: List[str] = Field(..., min_items=1, max_items=347)
     terminos: Optional[List[str]] = None
-    modo: Optional[str] = "enriched"
-    cliente_id: int = 1
+    modo: Optional[str] = Field("enriched", pattern="^(enriched|basic)$")
+    cliente_id: int = Field(1, ge=1, le=9999)
 
 
 class JobResponse(BaseModel):
@@ -68,13 +125,13 @@ class Comuna(BaseModel):
 
 class HealthResponse(BaseModel):
     ok: bool
-    service: str
-    db: str
     ts: str
 
 
 @contextmanager
 def get_db():
+    if not DB_URL:
+        raise HTTPException(status_code=503, detail="Base de datos no configurada")
     conn = psycopg2.connect(DB_URL, sslmode="require", cursor_factory=RealDictCursor)
     try:
         yield conn
@@ -84,36 +141,26 @@ def get_db():
 
 @app.get("/")
 async def root():
-    return {"ok": True, "service": "mapadata-api", "version": "2.0.0"}
+    return {"ok": True, "service": "mapadata-api"}
 
 
 @app.get("/health", response_model=HealthResponse)
 @app.get("/api/health", response_model=HealthResponse)
-async def health():
-    try:
-        with get_db() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT 1")
-                cursor.fetchone()
-        return HealthResponse(ok=True, service="mapadata-api", db="ok", ts=datetime.utcnow().isoformat() + "Z")
-    except Exception as exc:
-        logger.exception("healthcheck_failed")
-        return HealthResponse(ok=False, service="mapadata-api", db=f"error: {exc}", ts=datetime.utcnow().isoformat() + "Z")
+@limiter.limit("10/minute")
+async def health(request: Request):
+    return HealthResponse(ok=True, ts=datetime.utcnow().isoformat() + "Z")
 
 
 @app.get("/api/comunas", response_model=List[Comuna])
-async def listar_comunas(region: Optional[str] = None):
+@limiter.limit("60/minute")
+async def listar_comunas(request: Request, region: Optional[str] = None):
     with get_db() as conn:
         with conn.cursor() as cursor:
             if region:
+                region_clean = sanitize_comuna(region)
                 cursor.execute(
-                    """
-                    SELECT id, nombre, region, region_number
-                    FROM comunas_chile
-                    WHERE region ILIKE %s
-                    ORDER BY region, nombre
-                    """,
-                    (f"%{region}%",),
+                    "SELECT id, nombre, region, region_number FROM comunas_chile WHERE region ILIKE %s ORDER BY region, nombre",
+                    (f"%{region_clean}%",),
                 )
             else:
                 cursor.execute("SELECT id, nombre, region, region_number FROM comunas_chile ORDER BY region, nombre")
@@ -121,7 +168,8 @@ async def listar_comunas(region: Optional[str] = None):
 
 
 @app.get("/api/regiones")
-async def listar_regiones():
+@limiter.limit("30/minute")
+async def listar_regiones(request: Request):
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute("SELECT DISTINCT region, region_number FROM comunas_chile ORDER BY region")
@@ -129,7 +177,8 @@ async def listar_regiones():
 
 
 @app.post("/api/jobs", response_model=JobResponse)
-async def crear_job(job: JobCreate):
+@limiter.limit("5/minute")
+async def crear_job(request: Request, job: JobCreate, authorized: bool = Depends(verify_api_key)):
     if not job.comunas:
         raise HTTPException(status_code=400, detail="Debe seleccionar al menos una comuna")
 
@@ -141,7 +190,11 @@ async def crear_job(job: JobCreate):
                 comunas_normalizadas = [row["nombre"] for row in cursor.fetchall()]
             else:
                 for comuna in job.comunas:
-                    cursor.execute("SELECT nombre FROM comunas_chile WHERE nombre ILIKE %s LIMIT 1", (comuna,))
+                    try:
+                        comuna_clean = sanitize_comuna(comuna)
+                    except ValueError as e:
+                        raise HTTPException(status_code=400, detail=str(e))
+                    cursor.execute("SELECT nombre FROM comunas_chile WHERE nombre ILIKE %s LIMIT 1", (comuna_clean,))
                     result = cursor.fetchone()
                     if not result:
                         raise HTTPException(status_code=400, detail=f"Comuna no encontrada: {comuna}")
@@ -152,43 +205,36 @@ async def crear_job(job: JobCreate):
 
             terminos = job.terminos or DEFAULT_TERMINOS
             cursor.execute(
-                """
-                INSERT INTO scraping_jobs (comunas, terminos, modo, cliente_id, status)
-                VALUES (%s, %s, %s, %s, 'queued')
-                RETURNING id, status, comunas, terminos, modo, creado_en
-                """,
+                """INSERT INTO scraping_jobs (comunas, terminos, modo, cliente_id, status)
+                   VALUES (%s, %s, %s, %s, 'queued')
+                   RETURNING id, status, comunas, terminos, modo, creado_en""",
                 (comunas_normalizadas, terminos, job.modo, job.cliente_id),
             )
             new_job = cursor.fetchone()
             conn.commit()
 
-    logger.info("job_created", extra={"job_id": new_job["id"], "comunas": len(comunas_normalizadas)})
+    logger.info(f"job_created: id={new_job['id']}, comunas={len(comunas_normalizadas)}")
     return {
-        "id": new_job["id"],
-        "status": new_job["status"],
-        "comunas": new_job["comunas"],
-        "terminos": new_job["terminos"],
-        "modo": new_job["modo"],
-        "total_empresas": None,
-        "con_email": None,
-        "resultado_csv_url": None,
-        "creado_en": new_job["creado_en"],
-        "terminado_en": None,
+        "id": new_job["id"], "status": new_job["status"],
+        "comunas": new_job["comunas"], "terminos": new_job["terminos"],
+        "modo": new_job["modo"], "total_empresas": None,
+        "con_email": None, "resultado_csv_url": None,
+        "creado_en": new_job["creado_en"], "terminado_en": None,
         "error_message": None,
     }
 
 
 @app.get("/api/jobs/{job_id}", response_model=JobResponse)
-async def obtener_job(job_id: int):
+@limiter.limit("30/minute")
+async def obtener_job(request: Request, job_id: str, authorized: bool = Depends(verify_api_key)):
+    jid = sanitize_job_id(job_id)
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
-                """
-                SELECT id, status, comunas, terminos, modo, total_empresas, con_email,
-                       resultado_csv_url, creado_en, terminado_en, error_message
-                FROM scraping_jobs WHERE id = %s
-                """,
-                (job_id,),
+                """SELECT id, status, comunas, terminos, modo, total_empresas, con_email,
+                          resultado_csv_url, creado_en, terminado_en, error_message
+                   FROM scraping_jobs WHERE id = %s""",
+                (jid,),
             )
             job = cursor.fetchone()
             if not job:
@@ -197,14 +243,13 @@ async def obtener_job(job_id: int):
 
 
 @app.get("/api/jobs", response_model=List[JobResponse])
-async def listar_jobs(cliente_id: Optional[int] = None, status: Optional[str] = None):
+@limiter.limit("20/minute")
+async def listar_jobs(request: Request, cliente_id: Optional[int] = None, status: Optional[str] = None, authorized: bool = Depends(verify_api_key)):
     with get_db() as conn:
         with conn.cursor() as cursor:
-            query = """
-                SELECT id, status, comunas, terminos, modo, total_empresas, con_email,
-                       resultado_csv_url, creado_en, terminado_en, error_message
-                FROM scraping_jobs
-            """
+            query = """SELECT id, status, comunas, terminos, modo, total_empresas, con_email,
+                              resultado_csv_url, creado_en, terminado_en, error_message
+                       FROM scraping_jobs"""
             params = []
             conditions = []
             if cliente_id is not None:
@@ -215,23 +260,22 @@ async def listar_jobs(cliente_id: Optional[int] = None, status: Optional[str] = 
                 params.append(status)
             if conditions:
                 query += " WHERE " + " AND ".join(conditions)
-            query += " ORDER BY creado_en DESC LIMIT 100"
+            query += " ORDER BY creado_en DESC LIMIT 50"
             cursor.execute(query, params)
             return cursor.fetchall()
 
 
 @app.delete("/api/jobs/{job_id}")
-async def cancelar_job(job_id: int):
+@limiter.limit("10/minute")
+async def cancelar_job(request: Request, job_id: str, authorized: bool = Depends(verify_api_key)):
+    jid = sanitize_job_id(job_id)
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
-                """
-                UPDATE scraping_jobs
-                SET status = 'cancelled', terminado_en = now()
-                WHERE id = %s AND status IN ('queued', 'running')
-                RETURNING id, status
-                """,
-                (job_id,),
+                """UPDATE scraping_jobs SET status = 'cancelled', terminado_en = now()
+                   WHERE id = %s AND status IN ('queued', 'running')
+                   RETURNING id, status""",
+                (jid,),
             )
             result = cursor.fetchone()
             conn.commit()
@@ -241,7 +285,8 @@ async def cancelar_job(job_id: int):
 
 
 @app.get("/api/stats")
-async def estadisticas():
+@limiter.limit("10/minute")
+async def estadisticas(request: Request, authorized: bool = Depends(verify_api_key)):
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute("SELECT COUNT(*) AS total FROM comunas_chile")
@@ -253,14 +298,11 @@ async def estadisticas():
             cursor.execute("SELECT COALESCE(SUM(total_empresas), 0) AS total FROM scraping_jobs WHERE status = 'done'")
             total_empresas = cursor.fetchone()["total"]
             return {
-                "comunas_chile": total_comunas,
-                "total_jobs": total_jobs,
-                "jobs_por_estado": jobs_por_estado,
-                "total_empresas_extraidas": total_empresas,
+                "comunas_chile": total_comunas, "total_jobs": total_jobs,
+                "jobs_por_estado": jobs_por_estado, "total_empresas_extraidas": total_empresas,
             }
 
 
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8001")))
+    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("PORT", "8001")))
