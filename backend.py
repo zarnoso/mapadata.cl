@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""
-Mapadata Backend API - FastAPI
-
-Canonical API for mapadata.cl.
-This file should be the single source of truth for the public backend.
-"""
-
 import logging
 import os
 from contextlib import contextmanager
@@ -30,13 +23,7 @@ ALLOWED_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
-DEFAULT_TERMINOS = [
-    "comercializadora",
-    "distribuidora",
-    "importadora",
-    "mayorista",
-    "proveedor",
-]
+DEFAULT_TERMINOS = ["comercializadora", "distribuidora", "importadora", "mayorista", "proveedor"]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mapadata-api")
@@ -108,20 +95,10 @@ async def health():
             with conn.cursor() as cursor:
                 cursor.execute("SELECT 1")
                 cursor.fetchone()
-        return HealthResponse(
-            ok=True,
-            service="mapadata-api",
-            db="ok",
-            ts=datetime.utcnow().isoformat() + "Z",
-        )
+        return HealthResponse(ok=True, service="mapadata-api", db="ok", ts=datetime.utcnow().isoformat() + "Z")
     except Exception as exc:
         logger.exception("healthcheck_failed")
-        return HealthResponse(
-            ok=False,
-            service="mapadata-api",
-            db=f"error: {exc}",
-            ts=datetime.utcnow().isoformat() + "Z",
-        )
+        return HealthResponse(ok=False, service="mapadata-api", db=f"error: {exc}", ts=datetime.utcnow().isoformat() + "Z")
 
 
 @app.get("/api/comunas", response_model=List[Comuna])
@@ -139,9 +116,7 @@ async def listar_comunas(region: Optional[str] = None):
                     (f"%{region}%",),
                 )
             else:
-                cursor.execute(
-                    "SELECT id, nombre, region, region_number FROM comunas_chile ORDER BY region, nombre"
-                )
+                cursor.execute("SELECT id, nombre, region, region_number FROM comunas_chile ORDER BY region, nombre")
             return cursor.fetchall()
 
 
@@ -149,9 +124,7 @@ async def listar_comunas(region: Optional[str] = None):
 async def listar_regiones():
     with get_db() as conn:
         with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT DISTINCT region, region_number FROM comunas_chile ORDER BY region"
-            )
+            cursor.execute("SELECT DISTINCT region, region_number FROM comunas_chile ORDER BY region")
             return cursor.fetchall()
 
 
@@ -161,7 +134,6 @@ async def crear_job(job: JobCreate):
         raise HTTPException(status_code=400, detail="Debe seleccionar al menos una comuna")
 
     comunas_normalizadas: List[str] = []
-
     with get_db() as conn:
         with conn.cursor() as cursor:
             if "TODO_CHILE" in job.comunas:
@@ -169,24 +141,16 @@ async def crear_job(job: JobCreate):
                 comunas_normalizadas = [row["nombre"] for row in cursor.fetchall()]
             else:
                 for comuna in job.comunas:
-                    cursor.execute(
-                        "SELECT nombre FROM comunas_chile WHERE nombre ILIKE %s LIMIT 1",
-                        (comuna,),
-                    )
+                    cursor.execute("SELECT nombre FROM comunas_chile WHERE nombre ILIKE %s LIMIT 1", (comuna,))
                     result = cursor.fetchone()
                     if not result:
-                        raise HTTPException(
-                            status_code=400, detail=f"Comuna no encontrada: {comuna}"
-                        )
+                        raise HTTPException(status_code=400, detail=f"Comuna no encontrada: {comuna}")
                     comunas_normalizadas.append(result["nombre"])
 
             if not comunas_normalizadas:
-                raise HTTPException(
-                    status_code=400, detail="No se encontraron comunas válidas"
-                )
+                raise HTTPException(status_code=400, detail="No se encontraron comunas válidas")
 
             terminos = job.terminos or DEFAULT_TERMINOS
-
             cursor.execute(
                 """
                 INSERT INTO scraping_jobs (comunas, terminos, modo, cliente_id, status)
@@ -222,8 +186,7 @@ async def obtener_job(job_id: int):
                 """
                 SELECT id, status, comunas, terminos, modo, total_empresas, con_email,
                        resultado_csv_url, creado_en, terminado_en, error_message
-                FROM scraping_jobs
-                WHERE id = %s
+                FROM scraping_jobs WHERE id = %s
                 """,
                 (job_id,),
             )
@@ -244,18 +207,14 @@ async def listar_jobs(cliente_id: Optional[int] = None, status: Optional[str] = 
             """
             params = []
             conditions = []
-
             if cliente_id is not None:
                 conditions.append("cliente_id = %s")
                 params.append(cliente_id)
-
             if status:
                 conditions.append("status = %s")
                 params.append(status)
-
             if conditions:
                 query += " WHERE " + " AND ".join(conditions)
-
             query += " ORDER BY creado_en DESC LIMIT 100"
             cursor.execute(query, params)
             return cursor.fetchall()
@@ -276,13 +235,8 @@ async def cancelar_job(job_id: int):
             )
             result = cursor.fetchone()
             conn.commit()
-
             if not result:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Job no encontrado o ya completado/cancelado",
-                )
-
+                raise HTTPException(status_code=400, detail="Job no encontrado o ya completado/cancelado")
             return {"id": result["id"], "status": result["status"]}
 
 
@@ -292,22 +246,12 @@ async def estadisticas():
         with conn.cursor() as cursor:
             cursor.execute("SELECT COUNT(*) AS total FROM comunas_chile")
             total_comunas = cursor.fetchone()["total"]
-
             cursor.execute("SELECT COUNT(*) AS total FROM scraping_jobs")
             total_jobs = cursor.fetchone()["total"]
-
-            cursor.execute(
-                "SELECT status, COUNT(*) AS total FROM scraping_jobs GROUP BY status"
-            )
-            jobs_por_estado = {
-                row["status"]: row["total"] for row in cursor.fetchall()
-            }
-
-            cursor.execute(
-                "SELECT COALESCE(SUM(total_empresas), 0) AS total FROM scraping_jobs WHERE status = 'done'"
-            )
+            cursor.execute("SELECT status, COUNT(*) AS total FROM scraping_jobs GROUP BY status")
+            jobs_por_estado = {row["status"]: row["total"] for row in cursor.fetchall()}
+            cursor.execute("SELECT COALESCE(SUM(total_empresas), 0) AS total FROM scraping_jobs WHERE status = 'done'")
             total_empresas = cursor.fetchone()["total"]
-
             return {
                 "comunas_chile": total_comunas,
                 "total_jobs": total_jobs,

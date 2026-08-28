@@ -196,17 +196,13 @@ function Hero() {
           </Field>
         </div>
         <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-center">
-          <button onClick={onSearch} className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-6 py-3 font-semibold text-slate-950">
+          <button onClick={onSearch} className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-6 py-3 font-semibold text-slate-950 hover:bg-slate-200 transition">
             <Search className="h-4 w-4" />
             {loading ? "Creando job..." : "Buscar leads"}
           </button>
           <div className="text-sm text-slate-300">
             <span className="mr-2 font-semibold text-cyan-300">{estimated.toLocaleString("es-CL")}</span> empresas encontradas
           </div>
-        </div>
-        <div className="mt-4 flex items-center gap-3">
-          <input value={clientId} onChange={(e) => setClientId(e.target.value)} className="w-24 rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-right text-sm" />
-          <span className="text-xs text-slate-400">Cliente</span>
         </div>
         {job ? <div className="mt-4 rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-4 text-sm text-cyan-100">Job #{job.id} creado con estado <strong>{job.status}</strong></div> : null}
       </>
