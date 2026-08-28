@@ -69,7 +69,7 @@ const HeroSection = ({ onSearch }: HeroSectionProps) => {
           </p>
 
           <p className="text-primary font-semibold text-lg mt-4">
-            Más de 45,000 empresas actualizadas al {getMonthName()} 2024
+            Más de 45,000 empresas actualizadas al {getMonthName()} 2026
           </p>
         </div>
 

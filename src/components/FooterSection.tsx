@@ -32,7 +32,7 @@ const Footer = () => (
           <a href="#precios" className="hover:text-foreground transition-colors">Precios</a>
           <a href="#faq" className="hover:text-foreground transition-colors">FAQ</a>
         </div>
-        <p className="text-xs text-muted-foreground">© 2024 Mapadata.cl — Todos los derechos reservados.</p>
+        <p className="text-xs text-muted-foreground">© 2026 Mapadata.cl — Todos los derechos reservados.</p>
       </div>
     </div>
   </footer>
