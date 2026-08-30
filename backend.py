@@ -17,7 +17,10 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-DB_URL = os.environ.get("DATABASE_URL", "")
+DB_URL = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://neondb_owner:npg_EWrv14oPflCq@ep-autumn-firefly-at7pa7ut-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require",
+)
 ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.environ.get(

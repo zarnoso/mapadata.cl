@@ -11,7 +11,7 @@
 | Backend FastAPI (endpoints) | 2026-08-26 |
 | Worker Google Places | 2026-08-26 |
 | Tabla `scraping_jobs` en Neon | 2026-08-26 |
-| Tabla `comunas_chile` (347 comunas) | ✅ | 2026-08-28 |
+| Tabla `comunas_chile` (347 comunas) | 2026-08-28 |
 | API endpoints funcionales | 2026-08-26 |
 | Worker loop con `FOR UPDATE SKIP LOCKED` | 2026-08-26 |
 | Extracción de emails desde webs | 2026-08-26 |
@@ -29,19 +29,47 @@
 | Google Places API Key configurada | 2026-08-28 |
 | Worker procesando jobs | 2026-08-28 |
 | DNS de DonWeb apuntando a Cloudflare | 2026-08-28 |
+| Auditoría de seguridad backend | 2026-08-28 |
+| Rate limiting + headers de seguridad | 2026-08-28 |
+| Frontend deployado en Cloudflare Pages | 2026-08-28 |
+| **Worker v5.0 — Mejoras de conciliación y rendimiento** | 2026-08-28 |
 
-### En progreso
+### Mejoras del Worker v5.0
+
+| Mejora | Estado |
+|---|---|
+| 1. ThreadPoolExecutor con lock para DDG (thread-safe) | ✅ |
+| 2. Checkpointing incremental por zona | ✅ |
+| 3. Pool de conexiones + reconexión automática | ✅ |
+| 4. Dedup en SQL (memoria acotada) | ✅ |
+| 5. Errores informativos en DB (traceback) | ✅ |
+| 6. Graceful shutdown con signal handling | ✅ |
+| 7. Upload real a R2 (S3-compatible) | ✅ |
+| 8. Config validation al inicio | ✅ |
+| 9. Health check endpoint (puerto 8002) | ✅ |
+| 10. Circuit breaker para Places API | ✅ |
+| 11. Enriquecimiento paralelizado (3 workers) | ✅ |
+| 12. Batch writes (cada 50 zonas) | ✅ |
+| 13. Límite de jobs concurrentes (2) | ✅ |
+| 14. Alertas Telegram en fallo | ✅ |
+| 15. Stale job detector (5 min) | ✅ |
+
+---
+
+## En progreso
 
 | Tarea | Estado | Notas |
 |---|---|---|
-| Google Places API Key | ⏳ | Pendiente configurar en `.env.mapadata` |
-| CORS en bucket R2 | ⏳ | Pendiente |
+| Tabla `scraping_resultados` en Neon | ⏳ | Pendiente crear en Neon |
+| Configurar Telegram Bot Token | ⏳ | Pendiente |
+| Probar worker con job real | ⏳ | Pendiente |
 
-### Pendiente
+---
+
+## Pendiente
 
 | Tarea | Prioridad | Descripción |
 |---|---|---|
-| Deploy frontend en Cloudflare Pages | 🔴 Alta | Publicar frontend en la nube |
 | Configurar DNS `www.mapadata.cl` | 🔴 Alta | Apuntar a Cloudflare Pages |
 | Integrar MercadoPago | 🟡 Media | Procesar pagos |
 | Mejorar selector de comunas (mapa) | 🟡 Media | Mapa interactivo de Chile |
@@ -54,22 +82,25 @@
 
 ## Próximos pasos inmediatos
 
-1. **Configurar Google Places API Key**
+1. **Crear tabla `scraping_resultados` en Neon**
    ```bash
-   nano /home/chumbeke/mapadata.cl/.env.mapadata
-   # Poner: GOOGLE_PLACES_API_KEY=tu_key
-   systemctl --user restart mapadata-worker
+   psql $DATABASE_URL -f sql/create_scraping_resultados.sql
    ```
 
-2. **Deploy frontend en Cloudflare Pages**
-   - Ir a dash.cloudflare.com → Workers & Pages
-   - Create Application → Pages → Connect to Git
-   - Seleccionar repo `zarnoso/mapadata.cl`
-   - Build command: `npm run build`
-   - Output directory: `.next`
+2. **Probar worker con job de prueba**
+   ```bash
+   curl -X POST https://api.mapadata.cl/api/jobs \
+     -H "Content-Type: application/json" \
+     -d '{"comunas":["Santiago"],"cliente_id":1}'
+   ```
 
-3. **Configurar DNS `www.mapadata.cl`**
-   - Agregar registro CNAME `www` → Cloudflare Pages
+3. **Verificar health check**
+   ```bash
+   curl http://localhost:8002/health
+   ```
+
+4. **Configurar DNS `www.mapadata.cl`**
+   - Agregar registro CNAME `www` → `mapadata.pages.dev`
 
 ---
 
@@ -81,3 +112,6 @@
 - Los CSVs se generan con UTF-8 BOM para compatibilidad con Excel
 - El sistema respeta rate limits de Google (2s entre páginas, 0.1s entre detalles)
 - El backend corre en Python 3.11 (evita problemas con psycopg2 en 3.13)
+- El worker v5.0 incluye: paralelización, checkpointing, circuit breaker, batch writes
+- Health check endpoint: http://localhost:8002/health
+- Alertas Telegram configurables vía `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID`
